@@ -1,0 +1,40 @@
+# ========== 指导文档不需要上传 ==========
+docs/
+
+# ========== 模型权重、大checkpoint 绝对不上传 ==========
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+checkpoints/
+weights/
+saved_models/
+
+# ========== 运行输出、日志 ==========
+output/
+logs/
+runs/
+results/
+
+# ========== 数据集（体积大，放服务器本地磁盘） ==========
+data/
+datasets/
+
+# ========== Python缓存 ==========
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ========== 环境配置、本地路径配置 ==========
+venv/
+.env
+*.env
+
+# ========== IDE编辑器缓存 ==========
+.vscode/
+.idea/
+
+# ========== 其他临时文件 ==========
+*.tmp
+*.log
