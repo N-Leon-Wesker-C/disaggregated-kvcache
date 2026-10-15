@@ -3,8 +3,8 @@ analyze.py — 分析 KV Cache trace，提取 block 的生命周期和访问模�
 
 支持两种输入：
   - kvcache_trace.<pid>.jsonl  增量格式（每行一条事件），tracer 的正式产出。
-                               EngineCore 是 fork 出的独立进程，事件由子进程
-                               边产生边落盘，所以一个 pid 一个文件，可以传多个。
+                               EngineCore 是独立进程，事件由它边产生边落盘，
+                               所以一个 pid 一个文件，可以传多个（glob 也行）。
   - kvcache_trace.json         旧的汇总格式（一个 JSON 对象），兼容保留。
 
 用法:
@@ -245,7 +245,8 @@ def main():
         print("Error: no events in trace file.")
         sys.exit(1)
 
-    # 各进程的时间戳都基于 fork 时继承的同一个 start_time，可直接混合排序
+    # 各进程共用同一个时间原点（tracer 通过 KVTRACE_T0 环境变量下发，
+    # spawn 出的子进程继承它），所以不同 pid 的事件可以直接混合排序。
     events.sort(key=lambda e: e.get("timestamp", 0))
     print(f"Loaded {len(events)} events from {len(paths)} file(s)")
 

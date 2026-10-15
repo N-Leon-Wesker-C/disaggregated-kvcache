@@ -94,11 +94,29 @@ class KVTraceCollector:
 
     def __init__(self, path: Optional[str] = None):
         self.events: List[dict] = []
-        self.start_time = time.time()
+
+        # 时间原点必须跨进程统一。spawn 出的 EngineCore 是全新解释器，
+        # 如果各自在 __init__ 里取 time.time()，父子进程的时间戳就差了
+        # 一个「加载时间」，analyze.py 按 timestamp 归并多进程事件时会错位。
+        # 做法：第一个注册的进程把 T0 写进环境变量，spawn 继承环境变量，
+        # 于是所有进程共用同一个原点。
+        t0 = os.environ.get("KVTRACE_T0")
+        if t0 is None:
+            t0 = repr(time.time())
+            os.environ["KVTRACE_T0"] = t0
+        self.start_time = float(t0)
         self.active_blocks: dict = {}          # block_id → {alloc_time, request_id}
         self.request_blocks: dict = defaultdict(set)
 
-        #: block_id → 该 block 被读取的次数（decode 每一步都读）。
+        #: (block_id, request_id) → 该请求读该 block 的次数。
+        #:
+        #: 键必须是二元组，不能只用 block_id。一个 block 会被多个请求持有
+        #: （prefix cache 命中时共享、释放后又被下一个请求复用），而计数器
+        #: 在释放时被取走清零。只按 block_id 键控的话，谁先释放谁就把所有
+        #: 持有者的读数一并取走，后面的持有者取到 0 —— 实测 8 并发时
+        #: shared-prefix 类别里出现 128 条 reads=0，而先释放的那个拿到
+        #: 被夸大的 129→329（并发越高越离谱）。
+        #:
         #: 只在内存里累加，不落盘 —— 每步每 block 写一条事件会把文件撑爆
         #: （长请求 129 blocks × 64 steps ≈ 8000 条）。真正的计数在 block
         #: 释放时一次性写进 free 事件，I/O 是每个 block 一条。
@@ -180,12 +198,12 @@ class KVTraceCollector:
                 "timestamp": t,
                 "block_id": blk_id,
                 "request_id": request_id,
-                "reads": self.reads.pop(blk_id, 0),
+                "reads": self.reads.pop((blk_id, request_id), 0),
                 "pid": os.getpid(),
             })
 
     def record_step_reads(self, blocks, request_id: str):
-        """累加 block 的读取次数（每个 decode step 调用一次，**不落盘**）。
+        """累加「该请求读该 block」的次数（每个 decode step 调一次，**不落盘**）。
 
         为什么需要它：cache_blocks 只在 block 写满时触发一次，所以
         access 事件的计数恒为 1，回答不了「哪些 block 是热的」。真正
@@ -193,9 +211,13 @@ class KVTraceCollector:
         看不到 —— 唯一可见的等价信号是 allocate_slots()：
         scheduler 每个 step 对每个 running request 调一次。
         这里只做内存计数，等 block 释放时由 record_free() 一次性写出。
+
+        语义是「这个请求持有期间读了这个 block 多少次」。加总所有请求对
+        同一个 block_id 的读数，得到的是这个 block 服务过的总次数 ——
+        analyze.py 的 compute_access_counts 就是这么算热度的。
         """
         for blk in blocks:
-            self.reads[self._block_to_int(blk)] += 1
+            self.reads[(self._block_to_int(blk), request_id)] += 1
 
     def record_access(self, blocks, request_id: str, step: int = -1):
         """记录 block 被写入（写满一个 block 并进入 prefix cache）
@@ -369,7 +391,10 @@ def install_hooks():
             blocks = []
             for mgr in self.coordinator.single_type_managers:
                 blocks.extend(mgr.req_to_blocks.get(request_id, []))
-            tracer.record_step_reads(blocks, request_id)
+            # 转成 str 再交给 tracer：reads 的键是 (block_id, request_id)，
+            # 必须和 record_free 里那个 str(request_id) 逐字符相同才能对上。
+            # 上面的 req_to_blocks 查找仍用原对象，dict 的键类型不能变。
+            tracer.record_step_reads(blocks, str(request_id))
         return result
 
     kcm.KVCacheManager.allocate_slots = _patched_alloc_slots
