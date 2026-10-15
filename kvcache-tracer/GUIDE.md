@@ -205,9 +205,74 @@ def _patched(self, *args, **kwargs):
 ⚠️ **insights 的结论强依赖 workload**。4 个请求的玩具测试跑出来的
 "100% of blocks live < 1 second" 是这个 workload 的性质，不是 KV Cache
 的普遍性质 —— 要驱动换出策略，得先跑一个像样的 workload（并发请求、
-更长的生成、混合长短 prompt），再拿数据说话。
+更长的生成、混合长短 prompt），再拿数据说话。**Step 4.5 就是这件事。**
 
 **核心产出**：`INSIGHTS FOR GPU-SWAP POLICY DESIGN` 部分——trace 数据对策略设计的直接指导。
+
+---
+
+## Step 4.5：正式 workload 与并发度扫描
+
+Step 4 里那句"得先跑一个像样的 workload"就是这一步。`workload/` 下是一份
+确定性生成的负载（四类请求，见 [workload/workload.py](workload/workload.py)
+的模块文档），一条命令跑完三个并发度：
+
+```bash
+bash workload/run_sweep.sh
+python scripts/compare_runs.py c1=traces/c1.*.jsonl \
+                                c4=traces/c4.*.jsonl \
+                                c8=traces/c8.*.jsonl
+```
+
+### 实测结果
+
+Qwen2.5-7B-Instruct / RTX 4090 48G / `--gpu-memory-utilization 0.45`
+（池 124,960 tokens = 7,810 blocks）/ 72 个请求。
+
+**不随并发度变化的（结构量）** —— 三次运行逐项相同：
+
+| 指标 | 值 |
+|---|---|
+| 事件总数 | 32,245 |
+| alloc / free | 11,411 / 11,411（未闭合 0） |
+| 物理 block 数 / 池容量 | 7,809 / 7,810（**100.0%**） |
+| alloc 新分配 / 缓存命中 | 9,491 / 1,920（16.8%） |
+| block 平均复用次数 | 1.46× |
+| 每类 alloc 数 | short-chat 305 / long-prefill 7,153 / long-decode 730 / shared-prefix 3,223 |
+
+**随并发度变化的（时间量）**：
+
+| 指标 | 并发 1 | 并发 4 | 并发 8 |
+|---|---|---|---|
+| 墙钟 | 194.4s | 66.0s | 44.3s |
+| 吞吐 (tok/s) | 937 | 2,756 | 4,107 |
+| 端到端延迟 P50 / P90 | 1.00s / 11.92s | 1.06s / 14.77s | 1.64s / 16.59s |
+| 峰值同时存活 block | 327 | 779 | 1,387 |
+| 生命周期 P50 | 0.740s | 0.755s | 1.217s |
+| 生命周期 P90 | 2.098s | 2.813s | 4.125s |
+| 存活 <1s 占比 | 66.3% | 64.2% | 42.1% |
+
+### 三条结论
+
+1. **并发度只改变时间，不改变 block 结构。** 同一份 workload，无论 1 还是 8
+   并发，分配次数、物理 block 数、缓存命中率逐项相同。变化全部发生在时间维度：
+   每个 block 活得更久，短命 block 占比从 66% 掉到 42%。含义是 **swap 策略的
+   收益随并发上升** —— 并发 1 时三分之二的换出是白费功夫，并发 8 时只有四成。
+
+2. **池子会被填满，但不会发生抢占。** 池利用率 100%（7,809/7,810），逐出确实
+   在发生；但峰值同时存活的 block 只有 1,387，服务端日志里 `preemption` 出现 0 次。
+   这两个数差了一个数量级，说明**池子里几乎全是已经空闲、但仍带 prefix cache
+   缓存的 block，而不是被在跑的请求占着的 block** —— 这正是 GPU↔CPU swap 要处理
+   的对象：换出它们不影响任何在跑的请求。
+
+3. **请求类型之间差异巨大，分类策略有依据。** `long-decode` 的 block 读取次数
+   P50 是 588（热），`long-prefill` 只有 17，`short-chat` 恒为 64（等于输出长度）。
+   `shared-prefix` 的 16 个请求共享 2048 token 前缀，1920 次分配全部命中缓存
+   （15 × 128 block，共享前缀 100% 复用）。一个只看平均值的策略会同时误伤这四类。
+
+⚠️ 两个读数的坑：`long-decode` 的 `reads` 最大 768 = 输出长度，因为读数等于
+"该 block 被调度到并读取的步数"；而 `shared-prefix` 的 `reads` 是**按
+(block, request) 归因**的，共享 block 的总热度要把各次释放的 `reads` 相加。
 
 ---
 

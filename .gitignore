@@ -21,6 +21,8 @@ results/
 # 事件文件体积随请求量增长，不该进版本库
 kvcache_trace*.jsonl
 kvcache_trace*.json
+kvcache-tracer/traces/
+kvcache-tracer/logs/
 *.egg-info/
 
 # ========== 数据集（体积大，放服务器本地磁盘） ==========
