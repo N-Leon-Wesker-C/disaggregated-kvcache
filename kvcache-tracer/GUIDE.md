@@ -265,14 +265,36 @@ Qwen2.5-7B-Instruct / RTX 4090 48G / `--gpu-memory-utilization 0.45`
    缓存的 block，而不是被在跑的请求占着的 block** —— 这正是 GPU↔CPU swap 要处理
    的对象：换出它们不影响任何在跑的请求。
 
-3. **请求类型之间差异巨大，分类策略有依据。** `long-decode` 的 block 读取次数
-   P50 是 588（热），`long-prefill` 只有 17，`short-chat` 恒为 64（等于输出长度）。
-   `shared-prefix` 的 16 个请求共享 2048 token 前缀，1920 次分配全部命中缓存
-   （15 × 128 block，共享前缀 100% 复用）。一个只看平均值的策略会同时误伤这四类。
+3. **请求类型之间差异巨大，分类策略有依据。** 每个 block 被读的总次数
+   （按 block_id 累加，三次运行逐位相同）：
 
-⚠️ 两个读数的坑：`long-decode` 的 `reads` 最大 768 = 输出长度，因为读数等于
-"该 block 被调度到并读取的步数"；而 `shared-prefix` 的 `reads` 是**按
-(block, request) 归因**的，共享 block 的总热度要把各次释放的 `reads` 相加。
+   | 类别 | 单 block 读取 P50 | 单 block 读取 max | 读取总量 |
+   |---|---|---|---|
+   | short-chat | 64 | 79 | 16,328 |
+   | long-prefill | 17 | 49 | 122,747 |
+   | long-decode | 589 | 783 | 377,328 |
+   | shared-prefix | 128 | **2,049** | 404,624 |
+
+   最热的 block 是 `shared-prefix` 那 128 个共享前缀 block（2,049 次 ≈ 16 个
+   请求各读一遍），不是 `long-decode` 的 —— 后者热度上限被输出长度卡死在 768。
+   一个只看平均值的策略会同时误伤这四类。
+
+⚠️ **读数有两个必须分清的口径**，混用会得出错的结论：
+
+- free 事件里的 `reads` 是「**这个请求**持有期间读了这个 block 多少次」，
+  按 `(block_id, request_id)` 归因（见 README）。一个 block 被 N 个请求先后
+  或同时持有，就会有 N 条带 reads 的 free 事件。
+- **热度**是「这个 block 总共被读了多少次」，要把同一个 block 的各条 free
+  事件的 `reads` **相加**。`analyze.compute_access_counts` 和
+  `compare_runs.py` 都是这么算的。
+
+  踩过的坑：这里写成覆盖（`reads[blk] = e["reads"]`）而不是累加，会让 23% 的
+  block 读数失真、总量丢掉 30%~43%，最热的 block 从 2,064 次被低估到 768 次。
+  更阴的是"热 block 占比"这类粗指标几乎看不出变化（23.3% vs 20.5%）——
+  只有 Max / P90 会暴露它。
+
+- 另外 `reads` 本身不是「读了多少次内存」，而是「这个 block 被调度到并读取的
+  步数」，所以短请求的读数就等于它的输出 token 数（`short-chat` 恒为 64）。
 
 ---
 

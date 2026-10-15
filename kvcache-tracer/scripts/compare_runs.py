@@ -89,7 +89,6 @@ def run_stats(paths, pool_tokens, block_size):
 
     # 按类别聚合
     per_cat_lifetime = defaultdict(list)
-    per_cat_reads = defaultdict(list)
     per_cat_alloc = defaultdict(int)
     per_cat_cached = defaultdict(int)
     per_cat_requests = defaultdict(set)
@@ -103,10 +102,24 @@ def run_stats(paths, pool_tokens, block_size):
             per_cat_alloc[cat] += 1
             if e.get("source") == "cache":
                 per_cat_cached[cat] += 1
-    # reads 的归属：free 事件带 request_id，借它把读取次数划到类别上
+    # reads 的归属：free 事件带 request_id，借它把读取次数划到类别上。
+    #
+    # 必须按 block_id 累加，不能把每个 free 事件的 reads 直接收进列表算分位数。
+    # 一个 block 会被同类别的多个请求先后或同时持有（prefix cache 共享、释放后
+    # 又被复用），直接收列表等于每个 block 只保留一次持有的读数 —— 和
+    # analyze.compute_access_counts 曾经犯过的覆盖写是同一个坑：实测会让最热的
+    # block 从 2,064 次被低估到 768 次，而粗粒度的"热 block 占比"几乎看不出差别。
+    #
+    # 注意这里和总表的口径现在是一致的（都是"某个 block 被读的总次数"）；
+    # 同一个 block 若被跨类别的请求持有过，会在两个类别里各计一次 —— 这是对的，
+    # 它确实同时构成了两个类别的读取压力。
+    per_cat_block_reads = defaultdict(lambda: defaultdict(int))
+    per_cat_total_reads = defaultdict(int)
     for e in events:
         if e["event"] == "free" and "reads" in e:
-            per_cat_reads[category_of(e.get("request_id"))].append(e["reads"])
+            cat = category_of(e.get("request_id"))
+            per_cat_block_reads[cat][e["block_id"]] += e["reads"]
+            per_cat_total_reads[cat] += e["reads"]
 
     span = (events[-1]["timestamp"] - events[0]["timestamp"]) if events else 0.0
 
@@ -123,7 +136,8 @@ def run_stats(paths, pool_tokens, block_size):
         "span": span,
         "per_cat": {
             "lifetime": per_cat_lifetime,
-            "reads": per_cat_reads,
+            "block_reads": per_cat_block_reads,
+            "total_reads": per_cat_total_reads,
             "alloc": per_cat_alloc,
             "cached": per_cat_cached,
             "requests": per_cat_requests,
@@ -210,22 +224,28 @@ def print_per_category(runs):
         print("=" * 92)
         print(f"按类别拆解 — {lbl}")
         print("=" * 92)
+        # 列名标清楚口径：reads 是「某个 block 被读的总次数」（按 block_id 累加，
+        # 和总表一致），不是「单次持有的读数」—— 后者是另一个量，混用会得出错的
+        # 热度结论。
         print(f"{'类别':<16}{'请求数':>7}{'alloc':>9}{'其中缓存命中':>13}"
-              f"{'生命周期P50':>13}{'读取P50':>10}{'读取max':>10}")
-        print("-" * 92)
+              f"{'生命周期P50':>13}{'读取总量':>12}"
+              f"{'单block读取P50':>15}{'单block读取max':>15}")
+        print("-" * 104)
         cats = [c for c in CATEGORY_NAMES if c in pc["alloc"]]
         cats += [c for c in pc["alloc"] if c not in CATEGORY_NAMES]
         for cat in cats:
             lt = pc["lifetime"].get(cat, [])
-            rd = pc["reads"].get(cat, [])
+            rd = list(pc["block_reads"].get(cat, {}).values())
+            total = pc["total_reads"].get(cat, 0)
             alloc = pc["alloc"].get(cat, 0)
             cached = pc["cached"].get(cat, 0)
             hit = f"{cached}({cached/alloc*100:.0f}%)" if alloc else "-"
             print(f"{cat:<16}{len(pc['requests'].get(cat, ())):>7}{alloc:>9}"
                   f"{hit:>13}"
                   f"{(f'{pct(list(lt), .5):.3f}s' if lt else '-'):>13}"
-                  f"{(f'{pct(list(rd), .5):.0f}' if rd else '-'):>10}"
-                  f"{(f'{max(rd):,}' if rd else '-'):>10}")
+                  f"{total:>12,}"
+                  f"{(f'{pct(rd, .5):.0f}' if rd else '-'):>15}"
+                  f"{(f'{max(rd):,}' if rd else '-'):>15}")
 
 
 def main():
