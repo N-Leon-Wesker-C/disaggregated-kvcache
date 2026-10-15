@@ -27,6 +27,16 @@ PORT=8000
 GPU_UTIL=0.45            # 0.85 时池子有 46 万 token，负载根本压不满 → 不会逐出
 MAX_LEN=8192             # 放得下最长的 5160-token prompt
 BLOCK_SIZE=16            # vLLM v1 默认值
+#
+# 这三个值决定池容量，而池容量是「是否发生逐出」判定的分母，所以不能变。
+# 脚本每轮都会打印实际测到的池容量，三次必须相同 —— 不同就说明中途换了
+# 配置或有别的进程占显存，别拿这种数据做对比。
+#
+# 踩过的坑：vLLM 是启动时按当前显存实况切池子的，如果上一个服务刚用掉 40GB
+# 就被 kill，驱动侧还没完全回收，池子会明显偏小（实测同一套参数先得到
+# 110,416 tokens、之后稳定得到 124,960）。修法是给 vLLM 传
+# --kv-cache-memory-bytes <字节数> 把池子钉死；本脚本靠 stop_server 里的
+# 等待把它规避掉了。
 
 CONCURRENCIES="${CONCURRENCIES:-1 4 8}"
 PIDFILE=/tmp/kvtrace_server.pid
