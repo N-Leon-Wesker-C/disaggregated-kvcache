@@ -36,21 +36,40 @@ def load(path):
 
 
 def compute_block_lifetimes(events):
-    lifetimes = {}
+    """返回**每一次**获取→释放区间（每段一个 dict），不是每个 block 一条。
+
+    一个 block 会被获取/释放多次：prefix cache 命中的 block 会先后服务
+    多个请求，block pool 里的物理块也会被反复复用。所以不能按 block_id
+    覆盖着记 —— 那样会丢掉绝大部分区间（实测 784 次 alloc 只对应 220 个
+    block，覆盖写法扔掉 72% 的数据），而且还会把不同请求的时间戳错配成
+    一段根本不存在的"生命周期"：
+
+        R1 获取 @t=1, R2 获取 @t=2, R1 释放 @t=3, R2 释放 @t=5
+        覆盖写法 → {alloc:2, free:5, lifetime:3}   ← 对应不到任何真实区间
+
+    配对规则用 FIFO：释放事件闭合「最早那次尚未闭合的获取」。block 是
+    ref-count 的，谁先获取谁先释放，FIFO 才对应真实的持有关系。
+    """
+    open_acquisitions = defaultdict(list)   # block_id -> [(t, rid, source), ...]
+    lifetimes = []
+
     for e in events:
         blk = e["block_id"]
         if e["event"] == "alloc":
-            lifetimes[blk] = {
-                "alloc_time": e["timestamp"],
-                "free_time": None,
-                "lifetime": None,
-                "request_id": e.get("request_id", "?"),
-            }
+            open_acquisitions[blk].append(
+                (e["timestamp"], e.get("request_id", "?"), e.get("source", "new")))
         elif e["event"] == "free":
-            if blk in lifetimes:
-                lifetimes[blk]["free_time"] = e["timestamp"]
-                lifetimes[blk]["lifetime"] = (
-                    e["timestamp"] - lifetimes[blk]["alloc_time"])
+            pending = open_acquisitions.get(blk)
+            if pending:
+                alloc_time, request_id, source = pending.pop(0)
+                lifetimes.append({
+                    "block_id": blk,
+                    "alloc_time": alloc_time,
+                    "free_time": e["timestamp"],
+                    "lifetime": e["timestamp"] - alloc_time,
+                    "request_id": request_id,
+                    "source": source,
+                })
     return lifetimes
 
 
@@ -114,11 +133,16 @@ def print_statistics(lifetimes, access_counts, blocks_per_req, req_lifetimes):
     print("KV Cache Trace Analysis")
     print("=" * 60)
 
-    valid_lt = [d["lifetime"] for d in lifetimes.values() if d["lifetime"] is not None]
+    # lifetimes 现在是「获取区间」列表，不是「每个 block 一条」
+    valid_lt = [d["lifetime"] for d in lifetimes]
     if valid_lt:
         valid_lt.sort()
         n = len(valid_lt)
-        print(f"\n--- Block Lifetimes ({n} blocks) ---")
+        n_blocks = len({d["block_id"] for d in lifetimes})
+        n_cached = sum(1 for d in lifetimes if d["source"] == "cache")
+        print(f"\n--- Block Lifetimes ({n} 段区间, "
+              f"覆盖 {n_blocks} 个物理 block) ---")
+        print(f"  来源: 新分配 {n - n_cached}, 缓存命中 {n_cached}")
         print(f"  Avg:   {sum(valid_lt)/n:.4f}s")
         print(f"  Median:{valid_lt[n//2]:.4f}s")
         print(f"  P10:   {valid_lt[n//10]:.4f}s")
@@ -168,7 +192,7 @@ def print_swap_insights(lifetimes, access_counts, blocks_per_req):
     print("INSIGHTS FOR GPU-SWAP POLICY DESIGN")
     print("=" * 60)
 
-    valid_lt = [d["lifetime"] for d in lifetimes.values() if d["lifetime"] is not None]
+    valid_lt = [d["lifetime"] for d in lifetimes]
     if valid_lt:
         short_ratio = sum(1 for t in valid_lt if t < 1.0) / len(valid_lt)
         print(f"\n[Insight 1] {short_ratio*100:.0f}% of blocks live < 1 second.")
@@ -226,6 +250,15 @@ def main():
     print(f"Loaded {len(events)} events from {len(paths)} file(s)")
 
     lifetimes = compute_block_lifetimes(events)
+
+    # 获取了但没等到释放的区间会被丢掉（trace 结束时请求还在跑，或被中断）。
+    # 不吭声地丢数据容易让人误以为统计是完整的，所以显式报出来。
+    n_alloc = sum(1 for e in events if e["event"] == "alloc")
+    n_unclosed = n_alloc - len(lifetimes)
+    if n_unclosed:
+        print(f"  注意: {n_unclosed} 次获取没有配对的释放事件，"
+              f"未计入生命周期统计（trace 截断时正常）")
+
     access_counts = compute_access_counts(events)
     blocks_per_req = compute_blocks_per_request(events)
     req_lifetimes = compute_request_lifetimes(events)
