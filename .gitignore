@@ -9,12 +9,19 @@ docs/
 checkpoints/
 weights/
 saved_models/
+/models/
 
 # ========== 运行输出、日志 ==========
 output/
 logs/
 runs/
 results/
+
+# ========== kvcache-tracer 的 trace 产出 ==========
+# 事件文件体积随请求量增长，不该进版本库
+kvcache_trace*.jsonl
+kvcache_trace*.json
+*.egg-info/
 
 # ========== 数据集（体积大，放服务器本地磁盘） ==========
 data/

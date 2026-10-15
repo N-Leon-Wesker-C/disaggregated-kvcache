@@ -1,16 +1,36 @@
 """
-analyze.py — 分析 kvcache_trace.json，提取 KV Cache block 的生命周期和访问模式
+analyze.py — 分析 KV Cache trace，提取 block 的生命周期和访问模式
+
+支持两种输入：
+  - kvcache_trace.<pid>.jsonl  增量格式（每行一条事件），tracer 的正式产出。
+                               EngineCore 是 fork 出的独立进程，事件由子进程
+                               边产生边落盘，所以一个 pid 一个文件，可以传多个。
+  - kvcache_trace.json         旧的汇总格式（一个 JSON 对象），兼容保留。
 
 用法:
-    python scripts/analyze.py kvcache_trace.json
+    python scripts/analyze.py kvcache_trace.*.jsonl
+    python scripts/analyze.py kvcache_trace.1234.jsonl kvcache_trace.5678.jsonl
 """
 
+import glob
 import json
 import sys
 from collections import defaultdict
 
 
 def load(path):
+    """读单个 trace 文件，返回 {"events": [...]}。
+
+    .jsonl 每行一条事件；.json（旧格式）整个文件是一个对象。
+    """
+    if path.endswith(".jsonl"):
+        events = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+        return {"events": events}
     with open(path) as f:
         return json.load(f)
 
@@ -35,11 +55,27 @@ def compute_block_lifetimes(events):
 
 
 def compute_access_counts(events):
-    counts = defaultdict(int)
+    """每个 block 被读取的次数 —— hot/cold skew 的数据源。
+
+    首选：free 事件里的 "reads" 字段。tracer 在每个 decode step 通过
+    allocate_slots 累加计数，block 释放时一次性写出。这才是真实的
+    「这个 block 被读了几次」。
+
+    退化：数 access 事件。它来自 cache_blocks，只在 block 写满时触发
+    一次，所以每个 block 恒为 1 —— 那回答不了 hot/cold 问题，属于
+    没有 reads 字段时的兜底。
+    """
+    reads = defaultdict(int)
+    access = defaultdict(int)
     for e in events:
-        if e["event"] == "access":
-            counts[e["block_id"]] += 1
-    return dict(counts)
+        if e["event"] == "free" and "reads" in e:
+            # 累加而不是覆盖：一个 block 在生命周期里可能被获取/释放多次
+            # （prefix cache 命中会让同一个 block 服务多个请求），tracer 里
+            # 的计数器在每次释放时清零，所以这里要把各段相加才是总读取次数。
+            reads[e["block_id"]] += e["reads"]
+        elif e["event"] == "access":
+            access[e["block_id"]] += 1
+    return dict(reads) if reads else dict(access)
 
 
 def compute_blocks_per_request(events):
@@ -162,20 +198,32 @@ def print_swap_insights(lifetimes, access_counts, blocks_per_req):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "kvcache_trace.json"
+    patterns = sys.argv[1:] or ["kvcache_trace.json"]
 
-    try:
-        data = load(path)
-    except FileNotFoundError:
-        print(f"Error: {path} not found. Run the tracer first.")
-        sys.exit(1)
+    # 展开 glob（shell 没展开时也照常工作），一个 pid 一个文件
+    paths = []
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        paths.extend(hits if hits else [pat])
 
-    events = data.get("events", data)
+    events = []
+    for path in paths:
+        try:
+            data = load(path)
+        except FileNotFoundError:
+            print(f"Error: {path} not found. Run the tracer first.")
+            sys.exit(1)
+        got = data.get("events", data)
+        events.extend(got)
+        print(f"  {path}: {len(got)} events")
+
     if not events:
         print("Error: no events in trace file.")
         sys.exit(1)
 
-    print(f"Loaded {len(events)} events")
+    # 各进程的时间戳都基于 fork 时继承的同一个 start_time，可直接混合排序
+    events.sort(key=lambda e: e.get("timestamp", 0))
+    print(f"Loaded {len(events)} events from {len(paths)} file(s)")
 
     lifetimes = compute_block_lifetimes(events)
     access_counts = compute_access_counts(events)

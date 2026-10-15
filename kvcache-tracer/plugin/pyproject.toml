@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-kvtrace"
+version = "0.1.0"
+description = "KV Cache block 生命周期追踪 —— 通过 vLLM general_plugins 入口点注入 hook"
+requires-python = ">=3.10"
+
+# 关键：注册到 vllm.general_plugins 组。
+# vLLM 在 frontend / EngineCore / worker 每个进程里都会调用一次这个函数，
+# 所以 spawn 出来的 EngineCore 进程也会被覆盖（普通 monkey-patch 做不到）。
+[project.entry-points."vllm.general_plugins"]
+kvtrace = "vllm_kvtrace:register"
+
+[tool.setuptools]
+py-modules = ["vllm_kvtrace"]
