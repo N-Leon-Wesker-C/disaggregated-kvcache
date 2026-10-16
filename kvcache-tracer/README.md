@@ -2,7 +2,7 @@
 
 **KV Cache 块级生命周期追踪器**
 
-通过 monkey-patch vLLM (v0.26, v1 engine) 的 `SingleTypeKVCacheManager`，记录每个 KV Cache block 的分配、访问、释放事件。产出的 trace 数据直接驱动 [gpu-swap](../gpu-swap/) 的换出策略设计。
+通过 monkey-patch vLLM (v1 engine, 实测 0.25.1) 的 `SingleTypeKVCacheManager`，记录每个 KV Cache block 的分配、访问、释放事件。产出的 trace 数据直接驱动 [gpu-swap](../gpu-swap/) 的换出策略设计。
 
 ## Hook 点（按 vLLM 0.25.1 实际签名校对）
 

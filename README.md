@@ -82,4 +82,4 @@ disaggregated-kvcache/
 
 ## 环境
 
-- RTX 4090 (24GB)，CUDA 13.2，vLLM 0.26，Qwen2.5-7B-Instruct
+- RTX 4090 (48G)，CUDA 13.2，vLLM 0.25.1，Qwen2.5-7B-Instruct
