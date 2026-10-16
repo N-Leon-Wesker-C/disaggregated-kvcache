@@ -33,9 +33,13 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze  # noqa: E402
 
-#: workload 的四类请求。trace 里的 request_id 形如
-#: "cmpl-long-prefill-07-0-957e927f"，按子串匹配归类即可（见 workload.py）。
-CATEGORY_NAMES = ["short-chat", "long-prefill", "long-decode", "shared-prefix"]
+#: workload 类别。trace 里的 request_id 形如
+#: "cmpl-code-gen-007-r1-0-957e927f"，按子串匹配归类即可（见 workloads.py）。
+#:
+#: 注意这是**跨 workload 横向对比**用的（一份 trace 里混着多类请求）；同 workload
+#: 跨并发度的聚合报告应该用 scripts/report.py，它会按 request_id 的 -rN- 后缀把
+#: 同一次会话内的多次重复切开，本脚本做不到这件事。
+CATEGORY_NAMES = ["short-qa", "code-gen", "long-summarize"]
 
 
 def category_of(request_id):

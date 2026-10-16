@@ -13,6 +13,8 @@ requires-python = ">=3.10"
 # 所以 spawn 出来的 EngineCore 进程也会被覆盖（普通 monkey-patch 做不到）。
 [project.entry-points."vllm.general_plugins"]
 kvtrace = "vllm_kvtrace:register"
+steptrace = "vllm_steptrace:register"
+kvpolicy = "vllm_kvpolicy:register"
 
 [tool.setuptools]
-py-modules = ["vllm_kvtrace"]
+py-modules = ["vllm_kvtrace", "vllm_steptrace", "vllm_kvpolicy"]

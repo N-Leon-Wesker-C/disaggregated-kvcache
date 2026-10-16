@@ -25,6 +25,14 @@ kvcache-tracer/traces/
 kvcache-tracer/logs/
 *.egg-info/
 
+# 同一类产出的**分实验目录**。上面那条只挡住了 `traces/` 这一个名字，
+# 而实际跑出来的目录叫 traces-skew / traces-policy / traces-step，
+# 于是约 57 MB 的原始 trace 差点以"未跟踪文件"的身份被整个提交进来 ——
+# 文件名还带着 pid（lru.172140.jsonl），一看就是跑出来的，不是手写的。
+# 生成的 policy_thresholds.h 已在库里，构建不依赖这些文件。
+kvcache-tracer/traces-*/
+kvcache-tracer/results-*/
+
 # ========== 数据集（体积大，放服务器本地磁盘） ==========
 data/
 datasets/

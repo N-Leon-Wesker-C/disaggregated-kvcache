@@ -1,0 +1,28 @@
+  L=  512 (实测   546 tok)  第1次  TTFT    72.92 ms  usage=546
+  L=  512 (实测   515 tok)  第2次  TTFT    60.60 ms  usage=515
+  L=  512 (实测   535 tok)  第3次  TTFT    61.07 ms  usage=535
+  L= 1024 (实测  1050 tok)  第1次  TTFT   117.40 ms  usage=1050
+  L= 1024 (实测  1046 tok)  第2次  TTFT   112.95 ms  usage=1046
+  L= 1024 (实测  1053 tok)  第3次  TTFT   113.46 ms  usage=1053
+  L= 2048 (实测  2054 tok)  第1次  TTFT   220.53 ms  usage=2054
+  L= 2048 (实测  2062 tok)  第2次  TTFT   217.21 ms  usage=2062
+  L= 2048 (实测  2064 tok)  第3次  TTFT   218.46 ms  usage=2064
+  L= 3072 (实测  3099 tok)  第1次  TTFT   304.33 ms  usage=3099
+  L= 3072 (实测  3072 tok)  第2次  TTFT   298.70 ms  usage=3072
+  L= 3072 (实测  3083 tok)  第3次  TTFT   303.60 ms  usage=3083
+  L= 4096 (实测  4129 tok)  第1次  TTFT   422.53 ms  usage=4129
+  L= 4096 (实测  4121 tok)  第2次  TTFT   423.54 ms  usage=4121
+  L= 4096 (实测  4097 tok)  第3次  TTFT   410.60 ms  usage=4097
+
+======================================================================
+拟合结果
+======================================================================
+  TTFT ≈ 10.83 ms + 99.0485 µs × prompt_tokens
+  边际 prefill 成本 = 99.0485 µs/token
+  → 10,096 tok/s
+  固定开销（网络+排队+调度）= 10.83 ms
+  反推算力 = 153 TFLOPS（RTX 4090 bf16 峰值约 165 TFLOPS）
+
+  把这个数填回 replay：
+    RECOMPUTE_US_PER_TOKEN = 99.0485
+    （原来拍的是 38.5，相差 0.4×）
