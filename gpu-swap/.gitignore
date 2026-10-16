@@ -1,0 +1,9 @@
+# 构建产物（骨架版本没有任何条目，于是 build/ 和 .so 会被直接提交）
+build/
+*.so
+*.o
+*.d
+
+# 运行输出（根 .gitignore 已忽略 results/，这里再写一遍是因为
+# gpu-swap/ 被单独 clone/挂载时根规则不一定跟着来）
+results/
