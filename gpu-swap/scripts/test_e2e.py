@@ -233,10 +233,10 @@ class AdaptivePolicy:
 
         # ---- 逐级松手 ----
         if not candidates:
-            self.relaxed_hot += 1
-            candidates = fresh                      # 放开热块规则
+            self.relaxed_young += 1
+            candidates = fresh                      # 放开年龄规则（fresh 仍不含热块）
         if not candidates:
-            self.relaxed_young += 1                 # 连年龄也放开
+            self.relaxed_hot += 1                   # 连热块也放开 → 两条规则都已放开
             candidates = list(gpu_blocks)
 
         self.decisions += 1

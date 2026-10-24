@@ -453,6 +453,77 @@ static void test_adaptive_report() {
 }
 
 // ============================================================
+// 9b. 松手计数器的负对照
+// ============================================================
+//
+// 为什么这条必须有：两个计数器是**同一种事件的两个阶段**，只看"跑出来的
+// 数"分不清谁是谁 —— 计数器接反了的时候，两条都可能是非零，而报告照样
+// 打得出来、保护率照样算得对。所以必须构造一个**只有年龄规则**可能生效
+// 的场景：热块阈值取 INT64_MAX（任何块都不可能被判为热），断言
+// "放开热块"必须恰好为 0。计数器接反的版本上这条会失败。
+//
+// 顺带一个操作上的教训：`放开热块=0 放开年龄=0` 这种输出**不能**用来
+// 验收这条修复 —— 两条分支都没走到，改没改都一样。
+static void test_relax_counters() {
+    const size_t SLOT = 2u << 20;
+    {
+        section("松手计数器负对照：热块规则没生效，就不许记成'放开热块'");
+        GpuSwapManager m(4 * SLOT, 64 * SLOT);
+
+        AdaptivePolicy::Config cfg;
+        cfg.hot_access_threshold = INT64_MAX;  // 热块规则**永远**不生效
+        cfg.young_age_ms = 1000000;            // 所有块永远算"年轻"
+        AdaptivePolicy pol(cfg);
+        m.set_policy(&pol);
+
+        m.set_clock(100);
+        for (int i = 0; i < 4; ++i) {          // 4 个槽刚好占满
+            CHECK(m.allocate(i, BLK) != nullptr);
+            m.touch(i);                        // 读 1 次，离阈值无穷远
+        }
+        CHECK(m.allocate(100, BLK) != nullptr);  // 塞第 5 个，逼出一次换出
+
+        AdaptivePolicy::Report r = pol.report();
+        std::printf("    决策=%lld 夹断=%lld 放开热块=%lld 放开年龄=%lld\n",
+                    (long long)r.decisions, (long long)r.clamped,
+                    (long long)r.relaxed_hot, (long long)r.relaxed_young);
+        CHECK_EQ(r.decisions, 1);
+        CHECK(r.victims > 0);
+        CHECK_EQ(r.relaxed_hot, 0);    // ← 计数器接反的话这里是 1
+        CHECK_EQ(r.relaxed_young, 1);  // 年龄规则挡住了全部候选
+    }
+    {
+        // 正向级联：保护率上限放到 1.0（关掉夹断）、阈值为 -1（所有块都热），
+        // 于是两条规则必须**按顺序**都放开。这一条不能区分修复前后
+        // （接反的版本同样两条都 +1），它锁的是级联形状：
+        // "放开热块"只能发生在"放开年龄"之后，不可能单独出现。
+        section("松手计数器正向级联：两道都放开时两条都记一次");
+        GpuSwapManager m(4 * SLOT, 64 * SLOT);
+
+        AdaptivePolicy::Config cfg;
+        cfg.protect_max_rate = 1.0;            // 关掉夹断，否则 70 分位会把候选还回来
+        cfg.hot_access_threshold = -1;         // 所有块都是"热"的
+        AdaptivePolicy pol(cfg);
+        m.set_policy(&pol);
+
+        m.set_clock(100);
+        for (int i = 0; i < 4; ++i) {
+            CHECK(m.allocate(i, BLK) != nullptr);
+            m.touch(i);
+        }
+        CHECK(m.allocate(100, BLK) != nullptr);
+
+        AdaptivePolicy::Report r = pol.report();
+        std::printf("    决策=%lld 夹断=%lld 放开热块=%lld 放开年龄=%lld\n",
+                    (long long)r.decisions, (long long)r.clamped,
+                    (long long)r.relaxed_hot, (long long)r.relaxed_young);
+        CHECK_EQ(r.decisions, 1);
+        CHECK_EQ(r.relaxed_young, 1);
+        CHECK_EQ(r.relaxed_hot, 1);
+    }
+}
+
+// ============================================================
 // 10. 年龄规则真的挡住了新块
 // ============================================================
 static void test_young_rule() {
@@ -559,6 +630,7 @@ int main() {
     test_free_while_migrating();
     test_determinism();
     test_adaptive_report();
+    test_relax_counters();
     test_young_rule();
     test_bulk_roundtrip();
 

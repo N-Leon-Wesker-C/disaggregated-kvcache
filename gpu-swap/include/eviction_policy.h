@@ -235,8 +235,8 @@ public:
         int64_t decisions = 0;         // select_victim 调用次数
         int64_t victims = 0;           // 给出候选的次数
         int64_t clamped = 0;           // 绝对阈值被夹断（保护率超线）的次数
-        int64_t relaxed_hot = 0;       // 保护层清空候选、被迫放开热块规则的次数
-        int64_t relaxed_young = 0;     // 连年龄规则也放开的次数（最后一道）
+        int64_t relaxed_hot = 0;       // 连热块规则也放开的次数（最后一道；此时两条都已放开）
+        int64_t relaxed_young = 0;     // 保护层清空候选、被迫放开年龄规则的次数（第一道）
         int64_t young_block_hits = 0;  // 累计被年龄规则挡下的 (块 × 决策)
         int64_t hot_block_hits = 0;    // 累计被热块规则挡下的 (块 × 决策)
         int64_t resident_seen = 0;     // 累计见过的驻留块数（算保护率的分母）
@@ -316,11 +316,11 @@ public:
 
         // ---- 保护层逐级松手（**不是**掉进一个装作 LRU 的 fallback）----
         if (candidates.empty()) {
-            ++stats_.relaxed_hot;
-            candidates = fresh;                       // 放开热块规则
+            ++stats_.relaxed_young;
+            candidates = fresh;                       // 放开年龄规则（fresh 仍不含热块）
         }
         if (candidates.empty()) {
-            ++stats_.relaxed_young;                   // 连年龄也放开
+            ++stats_.relaxed_hot;                     // 连热块也放开 → 两条规则都已放开
             candidates.reserve(n);
             for (const auto& b : gpu_blocks) candidates.push_back(&b);
         }
